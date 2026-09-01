@@ -1,13 +1,23 @@
-# Python
+# Dependencies & Build Artifacts
+node_modules/
+web/node_modules/
+.next/
+web/.next/
+out/
+web/out/
+build/
+dist/
+coverage/
+.vercel/
+
+# Python & ML Caches
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 env/
-build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -24,7 +34,6 @@ wheels/
 # Virtual environments
 venv/
 .venv/
-env/
 .env/
 
 # Deep Learning / PyTorch
@@ -33,20 +42,38 @@ env/
 best_model.pth
 models/
 
-# Data
+# Data and Heavy Caches
 data/
 dataa/
-*.csv
-*.json
+ml/raw_dataset/
+ml/processed/
+ml/medic/processed/images/
 *.sqlite
 *.db
 
-# Node / JS (for crisislens-ui)
-node_modules/
+# Keep models, results, metadata, manifests
+!ml/models/*.pth
+!ml/models/*.json
+!ml/results/*.json
+!ml/medic/processed/*.csv
+!ml/medic/processed/*.json
+
+# Node / JS Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
+*.tsbuildinfo
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env*.local
+web/.env
+web/.env.local
+web/.env*.local
+*.pem
 
 # OS generated files
 .DS_Store
