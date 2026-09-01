@@ -1,0 +1,10 @@
+cyclone
+drought
+earthquake
+fire
+flood
+human_damage
+landslide
+normal
+structural_damage
+water_disaster
