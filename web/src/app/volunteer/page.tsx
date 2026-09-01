@@ -194,6 +194,7 @@ export default function VolunteerPage() {
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [smsDeliveries, setSmsDeliveries] = useState<SmsDeliveryRecord[]>([]);
   const [showSmsLog, setShowSmsLog] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   const loadData = () => {
     seedVolunteers();
@@ -206,6 +207,7 @@ export default function VolunteerPage() {
   };
 
   useEffect(() => {
+    setMounted(true);
     loadData();
 
     // React to volunteer notifications in real-time
@@ -300,8 +302,8 @@ export default function VolunteerPage() {
                 Volunteer Response Center
               </h1>
             </div>
-            <p className="text-zinc-500 text-sm ml-14">
-              Field verification system · {lastRefresh.toLocaleTimeString()}
+            <p className="text-zinc-500 text-sm ml-14" suppressHydrationWarning>
+              Field verification system · {mounted ? lastRefresh.toLocaleTimeString() : 'Live'}
             </p>
           </div>
 

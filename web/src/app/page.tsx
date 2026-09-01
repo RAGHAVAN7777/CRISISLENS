@@ -138,7 +138,7 @@ export default function OverviewPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 self-start md:self-auto">
-                      <div className="text-[10px] font-mono text-zinc-500 bg-zinc-900 px-2.5 py-1 rounded-md border border-zinc-800">{timeStr}</div>
+                      <div className="text-[10px] font-mono text-zinc-500 bg-zinc-900 px-2.5 py-1 rounded-md border border-zinc-800" suppressHydrationWarning>{timeStr}</div>
                       <Link 
                         href={`/volunteer/verify/${inc.id}`}
                         className="text-[11px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded-md transition-colors"
