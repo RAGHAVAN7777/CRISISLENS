@@ -1,0 +1,9 @@
+{
+  "0": "earthquake",
+  "1": "flood",
+  "2": "hurricane",
+  "3": "fire",
+  "4": "landslide",
+  "5": "not_disaster",
+  "6": "other_disaster"
+}
