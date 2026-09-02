@@ -92,3 +92,6 @@ Thumbs.db
 
 # Other
 CRISISLENS/
+
+# Explicitly track documentation
+!docs/
