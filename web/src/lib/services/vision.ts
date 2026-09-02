@@ -1,25 +1,28 @@
 export interface MedicDisasterTypeResult {
   model: string;
-  hazard: string;
+  hazard: string | string[];
   disaster_type: string;
   confidence: number;
   probabilities: Record<string, number>;
+  evidence?: string[];
   mode: 'real_ml_inference' | 'demo_fallback';
+  low_image_quality?: boolean;
 }
 
 export interface DamageSeverityResult {
   model: string;
-  hazard: string;
+  hazard: string | string[];
   severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   damage_class: string;
   confidence: number;
   evidence: string[];
   raw_probs?: Record<string, number>;
   mode: 'real_ml_inference' | 'demo_fallback';
+  low_image_quality?: boolean;
 }
 
 export interface VisionAnalysisResult {
-  hazard: string;
+  hazard: string | string[];
   severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   confidence: number;
   evidence: string[];
@@ -28,6 +31,7 @@ export interface VisionAnalysisResult {
   medic?: MedicDisasterTypeResult;
   damage?: DamageSeverityResult;
   modelsUsed?: string[];
+  low_image_quality?: boolean;
 }
 
 export class DisasterTypeClassifier {
@@ -161,6 +165,7 @@ export class VisionService {
       disaster_type: 'flood',
       confidence: 70,
       probabilities: {},
+      evidence: [],
       mode: 'demo_fallback' as const,
     };
 
@@ -195,10 +200,12 @@ export class VisionService {
       ((medicResult.confidence || 70) * 0.55) + ((damageResult.confidence || 70) * 0.45)
     );
 
+    const hazardTitle = Array.isArray(medicResult.hazard) ? medicResult.hazard.join(' / ') : (medicResult.hazard || 'Identified');
     const combinedEvidence = Array.from(
       new Set([
+        ...(medicResult.evidence || []),
         ...(damageResult.evidence || []),
-        `Disaster Type: ${medicResult.hazard || 'Identified'} (${medicResult.confidence || 70}% confidence)`,
+        `Disaster Type: ${hazardTitle} (${medicResult.confidence || 70}% confidence)`,
         `Damage Severity: ${(damageResult.damage_class || 'MODERATE').toUpperCase()} (${severity})`,
         ...(groqResult.evidence || []),
       ])
@@ -216,6 +223,7 @@ export class VisionService {
       medic: medicResult,
       damage: damageResult,
       modelsUsed: [medicResult.model || 'MEDIC', damageResult.model || 'BiTemporal'],
+      low_image_quality: medicResult.low_image_quality || damageResult.low_image_quality || false,
     };
   }
 }

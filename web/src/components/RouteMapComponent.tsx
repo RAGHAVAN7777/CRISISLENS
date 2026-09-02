@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker, useMap, Circle } from 'react-leaflet';
+import MarkerClusterGroup from 'react-leaflet-cluster';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { EvaluatedRoute } from '@/lib/services/realRoutingService';
@@ -82,16 +83,24 @@ function makeIncidentIcon(incident: Incident) {
   else if (incident.severity === 'HIGH') color = '#ea580c';
   else if (incident.severity === 'LOW') color = '#eab308';
 
+  const isUncertain = incident.hazard === 'UNCERTAIN' || incident.hazard === 'uncertain';
+  if (isUncertain) color = '#52525b';
+
   const isVerified = incident.verificationStatus === 'VERIFIED' || incident.status === 'VERIFIED';
+  const borderStyle = isUncertain ? '2px dashed #a1a1aa' : `2px solid ${isVerified ? '#22c55e' : '#ffffff'}`;
+  
+  const isStale = incident.status === 'STALE';
+  const opacity = isStale ? 0.4 : 1;
 
   return L.divIcon({
     html: `
       <div style="
+        opacity: ${opacity};
         background:${color};
         width:26px;
         height:26px;
         border-radius:50%;
-        border:${isVerified ? '2.5px solid #22c55e' : '2px solid #ffffff'};
+        border:${borderStyle};
         box-shadow:0 0 14px ${color};
         display:flex;
         align-items:center;
@@ -99,8 +108,9 @@ function makeIncidentIcon(incident: Incident) {
         color:#ffffff;
         font-size:12px;
         font-weight:bold;
+        filter: ${isStale ? 'grayscale(100%)' : 'none'};
       ">
-        ⚠
+        ${isStale ? 'S' : '⚠'}
       </div>
     `,
     className: 'custom-incident-leaflet-icon',
@@ -264,18 +274,22 @@ export default function RouteMapComponent({
       })}
 
       {/* ⚠ REAL ACTIVE CITIZEN INCIDENTS */}
+      <MarkerClusterGroup chunkedLoading>
       {incidents
         .filter(i => i.status !== 'RESOLVED' && i.status !== 'REJECTED' && i.verificationStatus !== 'FALSE_REPORT')
-        .map(inc => (
-          <Marker
-            key={inc.id}
-            position={[inc.latitude, inc.longitude]}
-            icon={makeIncidentIcon(inc)}
-          >
+        .map(inc => {
+          const isApproximate = inc.location_precision === 'approximate';
+
+          const PopupContent = (
             <Popup>
               <div className="text-xs space-y-1 p-1">
+                {isApproximate && (
+                  <div className="font-bold text-indigo-400 text-[10px] mb-1 uppercase">
+                    📍 Approximate SMS Location
+                  </div>
+                )}
                 <div className="font-black text-red-400 uppercase flex items-center gap-1">
-                  🚨 {inc.hazard || 'Disaster Incident'}
+                  🚨 {Array.isArray(inc.hazard) ? inc.hazard.join(' / ') : (inc.hazard || 'Disaster Incident')}
                 </div>
                 <div className="text-zinc-300 text-[11px]">
                   Severity: <span className="font-bold text-red-300">{inc.severity}</span>
@@ -288,8 +302,38 @@ export default function RouteMapComponent({
                 </div>
               </div>
             </Popup>
-          </Marker>
-        ))}
+          );
+
+          if (isApproximate) {
+            return (
+              <Circle
+                key={inc.id}
+                center={[inc.latitude, inc.longitude]}
+                radius={800}
+                pathOptions={{
+                  color: inc.severity === 'CRITICAL' ? '#ef4444' : inc.severity === 'HIGH' ? '#f59e0b' : '#3b82f6',
+                  fillColor: inc.severity === 'CRITICAL' ? '#ef4444' : inc.severity === 'HIGH' ? '#f59e0b' : '#3b82f6',
+                  fillOpacity: 0.3,
+                  weight: 2,
+                  dashArray: '5, 5'
+                }}
+              >
+                {PopupContent}
+              </Circle>
+            );
+          }
+
+          return (
+            <Marker
+              key={inc.id}
+              position={[inc.latitude, inc.longitude]}
+              icon={makeIncidentIcon(inc)}
+            >
+              {PopupContent}
+            </Marker>
+          );
+        })}
+      </MarkerClusterGroup>
 
       {/* 🛣️ GHOST / PREVIOUS ROUTE (When rerouted) */}
       {previousRoute && previousRoute.waypoints && (

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents, Circle } from 'react-leaflet';
+import MarkerClusterGroup from 'react-leaflet-cluster';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Incident, Shelter, VerificationStatus } from '@/lib/storage';
@@ -31,16 +32,23 @@ const createIncidentIcon = (incident: Incident) => {
   const isVerified = incident.verificationStatus === 'VERIFIED' || incident.status === 'VERIFIED';
   const isFieldReq = incident.verificationStatus === 'FIELD_VERIFICATION_REQUIRED' || incident.isBlurry;
   const isFalseReport = incident.verificationStatus === 'FALSE_REPORT' || incident.status === 'REJECTED';
+  const isUncertain = incident.hazard === 'UNCERTAIN' || incident.hazard === 'uncertain';
+
+  const isStale = incident.status === 'STALE';
+  const opacity = isStale ? 0.4 : 1;
+  const markerBg = isUncertain ? '#52525b' : color;
+  const borderStyle = isUncertain ? '2px dashed #a1a1aa' : `3px solid ${isVerified ? '#ffffff' : isFieldReq ? '#fecaca' : '#18181b'}`;
 
   return L.divIcon({
     html: `
       <div style="
-        background-color: ${color};
+        opacity: ${opacity};
+        background-color: ${markerBg};
         width: 26px;
         height: 26px;
         border-radius: 50%;
-        border: 3px solid ${isVerified ? '#ffffff' : isFieldReq ? '#fecaca' : '#18181b'};
-        box-shadow: 0 0 16px ${color};
+        border: ${borderStyle};
+        box-shadow: 0 0 16px ${markerBg};
         display: flex;
         align-items: center;
         justify-content: center;
@@ -48,8 +56,9 @@ const createIncidentIcon = (incident: Incident) => {
         font-size: 11px;
         font-weight: bold;
         cursor: pointer;
+        filter: ${isStale ? 'grayscale(100%)' : 'none'};
       ">
-        ${isVerified ? '✓' : isFieldReq ? '!' : isFalseReport ? '✕' : '•'}
+        ${isVerified ? '✓' : isFieldReq ? '!' : isFalseReport ? '✕' : isStale ? 'S' : '•'}
       </div>
     `,
     className: 'custom-leaflet-icon',
@@ -114,29 +123,62 @@ function ChangeMapView({ center, zoom }: { center: [number, number]; zoom: numbe
   return null;
 }
 
+function MapClickHandler({ onMapClick }: { onMapClick: (lat: number, lng: number) => void }) {
+  useMapEvents({
+    click(e) {
+      onMapClick(e.latlng.lat, e.latlng.lng);
+    },
+  });
+  return null;
+}
+
+function FitBoundsOnIncidents({ incidents }: { incidents: Incident[] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (incidents.length > 0) {
+      const valid = incidents.filter(i => typeof i.latitude === 'number' && typeof i.longitude === 'number' && !isNaN(i.latitude) && !isNaN(i.longitude));
+      if (valid.length > 0) {
+        try {
+          const bounds = L.latLngBounds(valid.map(inc => [inc.latitude, inc.longitude]));
+          map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+        } catch(e) {}
+      }
+    }
+  }, [incidents, map]);
+  return null;
+}
+
 export default function MapComponent({ 
   incidents, 
   shelters = [], 
   onIncidentClick,
-  center = [34.05, -118.24],
+  center,
   zoom = 13,
-  autoOpenLatest = false
+  autoOpenLatest = false,
+  onMapClick,
+  clickedLocation
 }: { 
   incidents: Incident[], 
   shelters?: Shelter[],
   onIncidentClick?: (inc: Incident) => void,
   center?: [number, number],
   zoom?: number,
-  autoOpenLatest?: boolean
+  autoOpenLatest?: boolean,
+  onMapClick?: (lat: number, lng: number) => void,
+  clickedLocation?: [number, number]
 }) {
+  const defaultCenter = center || [34.05, -118.24];
+  
   return (
     <MapContainer 
-      center={center} 
+      center={defaultCenter} 
       zoom={zoom} 
       style={{ height: '100%', width: '100%', background: '#09090b' }}
       zoomControl={true}
     >
-      <ChangeMapView center={center} zoom={zoom} />
+      {onMapClick && <MapClickHandler onMapClick={onMapClick} />}
+      {!center && <FitBoundsOnIncidents incidents={incidents} />}
+      {center && <ChangeMapView center={center} zoom={zoom} />}
       
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -158,6 +200,12 @@ export default function MapComponent({
           background: #18181b !important;
         }
       `}} />
+
+      {clickedLocation && (
+        <Marker position={clickedLocation}>
+          <Popup>Selected Location: {clickedLocation[0].toFixed(5)}, {clickedLocation[1].toFixed(5)}</Popup>
+        </Marker>
+      )}
       
       {shelters.filter(s => typeof s.latitude === 'number' && !isNaN(s.latitude) && typeof s.longitude === 'number' && !isNaN(s.longitude)).map(s => (
         <Marker 
@@ -196,26 +244,30 @@ export default function MapComponent({
         </Marker>
       ))}
 
-      {incidents.filter(inc => typeof inc.latitude === 'number' && !isNaN(inc.latitude) && typeof inc.longitude === 'number' && !isNaN(inc.longitude)).map((inc, index) => {
+      <MarkerClusterGroup chunkedLoading>
+        {incidents.filter(inc => typeof inc.latitude === 'number' && !isNaN(inc.latitude) && typeof inc.longitude === 'number' && !isNaN(inc.longitude)).map((inc, index) => {
         const { emoji, label, color } = getVerificationColor(inc);
         const timeStr = new Date(inc.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const isLatest = index === 0;
+        
+        const isApproximate = inc.location_precision === 'approximate';
 
         return (
           <Marker 
-            key={inc.id} 
+            key={inc.id || index}
             position={[inc.latitude, inc.longitude]} 
             icon={createIncidentIcon(inc)}
-            eventHandlers={{
-              click: () => onIncidentClick && onIncidentClick(inc)
-            }}
           >
             <Popup autoPan={true}>
               <div className="text-zinc-200 font-sans p-1 min-w-[210px] space-y-2">
+                {isApproximate && (
+                  <div className="bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-[10px] font-bold px-2 py-1 rounded text-center mb-2">
+                    📍 APPROXIMATE LOCATION (SMS)
+                  </div>
+                )}
                 <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
                   <div className="flex items-center gap-1.5 font-bold text-sm text-white">
                     <span>🚨</span>
-                    <span>{inc.hazard}</span>
+                    <span>{Array.isArray(inc.hazard) ? inc.hazard.join(' / ') : inc.hazard}</span>
                   </div>
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
                     inc.severity === 'CRITICAL' ? 'border-red-500/40 text-red-400 bg-red-500/10' :
@@ -266,6 +318,7 @@ export default function MapComponent({
           </Marker>
         );
       })}
+      </MarkerClusterGroup>
     </MapContainer>
   );
 }

@@ -78,7 +78,14 @@ export default function ResponderPage() {
   const unverifiedCount = incidents.filter(i => i.status === 'PENDING' || i.status === 'AI_CLASSIFIED').length;
   const verifiedCount = incidents.filter(i => i.status === 'VERIFIED').length;
 
-  const verificationQueue = incidents.filter(i => i.status === 'PENDING' || i.status === 'AI_CLASSIFIED');
+  const severityRank = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1, UNCERTAIN: 0 };
+  const verificationQueue = incidents
+    .filter(i => i.status === 'PENDING' || i.status === 'AI_CLASSIFIED')
+    .sort((a, b) => {
+      const sevDiff = (severityRank[b.severity as keyof typeof severityRank] || 0) - (severityRank[a.severity as keyof typeof severityRank] || 0);
+      if (sevDiff !== 0) return sevDiff;
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    });
 
   return (
     <div className="p-8 max-w-[1600px] mx-auto h-full flex flex-col relative">

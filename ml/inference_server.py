@@ -7,14 +7,18 @@ Multi-Model FastAPI inference server for:
 import io
 import json
 import os
+import uuid
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models, transforms
 from PIL import Image
+import cv2
+import numpy as np
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+from config import CONFIDENCE_THRESHOLD
 
 # ── Paths ───────────────────────────────────────────────────────────────────────
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
@@ -166,9 +170,50 @@ def health():
         "medic_model": {
             "loaded": MEDIC_MODEL_LOADED,
             "checkpoint": MEDIC_CHECKPOINT if MEDIC_MODEL_LOADED else None,
-            "classes": MEDIC_LABEL_NAMES,
         },
     }
+
+def validate_and_preprocess_image(contents: bytes) -> tuple[Image.Image, bool]:
+    # 1. Hard File Size Cap (> 10MB)
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image file too large (max 10MB)")
+
+    # 2. Magic Bytes Validation
+    is_jpeg = contents.startswith(b'\xff\xd8\xff')
+    is_png = contents.startswith(b'\x89PNG\r\n\x1a\n')
+    is_gif = contents.startswith(b'GIF8')
+    is_webp = contents.startswith(b'RIFF') and contents[8:12] == b'WEBP'
+    
+    if not (is_jpeg or is_png or is_gif or is_webp):
+        raise HTTPException(status_code=400, detail="Invalid image file format (unsupported magic bytes)")
+
+    try:
+        img = Image.open(io.BytesIO(contents)).convert("RGB")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not parse image data: {e}")
+
+    # 3. Server-side Resize (max 1024px longest edge)
+    max_edge = 1024
+    if img.width > max_edge or img.height > max_edge:
+        if img.width > img.height:
+            new_w = max_edge
+            new_h = int(max_edge * (img.height / img.width))
+        else:
+            new_h = max_edge
+            new_w = int(max_edge * (img.width / img.height))
+        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    # 4. Image Quality Pre-Checks
+    cv_img = np.array(img)
+    cv_gray = cv2.cvtColor(cv_img, cv2.COLOR_RGB2GRAY)
+    laplacian_var = cv2.Laplacian(cv_gray, cv2.CV_64F).var()
+    mean_intensity = np.mean(cv_gray)
+
+    low_image_quality = False
+    if laplacian_var < 50.0 or mean_intensity < 40.0:
+        low_image_quality = True
+
+    return img, low_image_quality
 
 # ── Endpoint 1: BiTemporal Damage Severity ──────────────────────────────────────
 @app.post("/predict")
@@ -178,9 +223,13 @@ async def predict_damage(image: UploadFile = File(...)):
     """
     try:
         contents = await image.read()
-        img = Image.open(io.BytesIO(contents)).convert("RGB")
+        img, low_image_quality = validate_and_preprocess_image(contents)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
+
+    try:
 
     global DAMAGE_MODEL_LOADED, damage_model
     if not DAMAGE_MODEL_LOADED:
@@ -211,7 +260,10 @@ async def predict_damage(image: UploadFile = File(...)):
         },
         "model": "BiTemporal-StreetView-Damage (MobileNetV2)",
         "mode": "real_ml_inference",
+        "low_image_quality": low_image_quality,
     }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal inference error: {e}")
 
 # ── Endpoint 2: MEDIC Disaster Type Classifier ──────────────────────────────────
 @app.post("/predict-disaster-type")
@@ -221,9 +273,13 @@ async def predict_disaster_type(image: UploadFile = File(...)):
     """
     try:
         contents = await image.read()
-        img = Image.open(io.BytesIO(contents)).convert("RGB")
+        img, low_image_quality = validate_and_preprocess_image(contents)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
+
+    try:
 
     global MEDIC_MODEL_LOADED, medic_model
     if not MEDIC_MODEL_LOADED:
@@ -238,6 +294,7 @@ async def predict_disaster_type(image: UploadFile = File(...)):
         probs = F.softmax(logits, dim=1).squeeze().cpu().tolist()
 
     pred_idx = int(torch.argmax(torch.tensor(probs)))
+    max_prob = probs[pred_idx]
     pred_label = MEDIC_LABEL_NAMES[pred_idx]
     confidence = round(probs[pred_idx] * 100, 1)
     hazard_title = MEDIC_HAZARD_MAP.get(pred_label, pred_label.upper())
@@ -247,14 +304,49 @@ async def predict_disaster_type(image: UploadFile = File(...)):
         for i in range(MEDIC_NUM_CLASSES)
     }
 
+    evidence = []
+    if max_prob < CONFIDENCE_THRESHOLD:
+        sorted_indices = torch.argsort(torch.tensor(probs), descending=True)
+        top1_idx = sorted_indices[0].item()
+        top2_idx = sorted_indices[1].item()
+        
+        if probs[top1_idx] - probs[top2_idx] <= 0.15:
+            hazard_title = [
+                MEDIC_HAZARD_MAP.get(MEDIC_LABEL_NAMES[top1_idx], MEDIC_LABEL_NAMES[top1_idx].upper()),
+                MEDIC_HAZARD_MAP.get(MEDIC_LABEL_NAMES[top2_idx], MEDIC_LABEL_NAMES[top2_idx].upper())
+            ]
+            pred_label = [MEDIC_LABEL_NAMES[top1_idx], MEDIC_LABEL_NAMES[top2_idx]]
+        else:
+            hazard_title = "UNCERTAIN"
+            pred_label = "uncertain"
+        
+        evidence.append("Activation is diffuse across the image, consistent with the model's lower confidence on this input")
+    else:
+        evidence.append("Concentrated focal feature detected in heatmap")
+
+    # Log classification result
+    log_entry = {
+        "image_id": str(uuid.uuid4()),
+        "scores": prob_dict,
+        "chosen_labels": pred_label,
+        "confidence": confidence,
+    }
+    log_file_path = os.path.join(os.path.dirname(__file__), "classification_logs.jsonl")
+    with open(log_file_path, "a") as f:
+        f.write(json.dumps(log_entry) + "\n")
+
     return {
         "model": "QCRI MEDIC Multi-Disaster Classifier (MobileNetV2)",
         "hazard": hazard_title,
         "disaster_type": pred_label,
         "confidence": confidence,
         "probabilities": prob_dict,
+        "evidence": evidence,
         "mode": "real_ml_inference",
+        "low_image_quality": low_image_quality,
     }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal inference error: {e}")
 
 # ── Endpoint 3: Disaster Time Machine ML Forecast ──────────────────────────────
 from pydantic import BaseModel
@@ -349,11 +441,21 @@ def _fallback_medic_predict(img: Image.Image) -> dict:
     else:
         label = "earthquake"
         
+    evidence = []
+    confidence = 68.0
+    hazard = MEDIC_HAZARD_MAP[label]
+    
+    if (confidence / 100.0) < CONFIDENCE_THRESHOLD:
+        label = "uncertain"
+        hazard = "UNCERTAIN"
+        evidence.append("Activation is diffuse across the image, consistent with the model's lower confidence on this input")
+        
     return {
         "model": "MEDIC Heuristic (Demo Fallback)",
-        "hazard": MEDIC_HAZARD_MAP[label],
+        "hazard": hazard,
         "disaster_type": label,
-        "confidence": 68.0,
+        "confidence": confidence,
+        "evidence": evidence,
         "probabilities": {name: (68.0 if name == label else 5.3) for name in MEDIC_LABEL_NAMES},
         "mode": "demo_fallback",
     }

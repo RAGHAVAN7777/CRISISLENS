@@ -27,13 +27,14 @@ export default function MapPage() {
   const [filterHazard, setFilterHazard] = useState<string>('ALL');
   const [filterSeverity, setFilterSeverity] = useState<string>('ALL');
   const [filterVerification, setFilterVerification] = useState<string>('ALL');
+  const [includeOlder, setIncludeOlder] = useState<boolean>(false);
   
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
 
   const refreshData = useCallback(() => {
-    setIncidents(getIncidents());
+    setIncidents(getIncidents(includeOlder));
     setShelters(getShelters());
-  }, []);
+  }, [includeOlder]);
 
   useEffect(() => {
     refreshData();
@@ -130,6 +131,17 @@ export default function MapPage() {
             <option value="MEDIUM">Medium</option>
             <option value="LOW">Low</option>
           </select>
+          
+          <button
+            onClick={() => setIncludeOlder(prev => !prev)}
+            className={`text-xs rounded-lg px-3 py-2 border font-bold transition-colors ${
+              includeOlder 
+                ? 'bg-indigo-500/20 text-indigo-400 border-indigo-500/50' 
+                : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-zinc-300'
+            }`}
+          >
+            {includeOlder ? 'Showing All Reports' : 'Load older reports (72h+)'}
+          </button>
         </div>
       </div>
 

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Navigation as NavIcon, MapPin, CheckCircle2, ShieldCheck, AlertTriangle, Compass, ArrowRight, RefreshCw, Layers } from 'lucide-react';
 import { getShelters, getIncidents, findNearestSafeShelter, getAvailableShelters, Shelter, Incident, Route as RouteType } from '@/lib/storage';
+import { distMeters } from '@/lib/services/realRoutingService';
 import dynamic from 'next/dynamic';
 
 const MapComponent = dynamic(() => import('@/components/MapComponent'), { 
@@ -29,6 +30,7 @@ export default function RoutingPage() {
     waypoints: string[];
   } | null>(null);
   const [isCalculating, setIsCalculating] = useState<boolean>(false);
+  const [safetyWarning, setSafetyWarning] = useState<string | null>(null);
 
   useEffect(() => {
     const loadedShelters = getShelters();
@@ -43,6 +45,17 @@ export default function RoutingPage() {
     }
   }, []);
 
+  const handleUseMyGPS = () => {
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(pos => {
+        setUserLat(pos.coords.latitude);
+        setUserLng(pos.coords.longitude);
+      }, () => {
+        alert("Failed to access GPS. Please allow location permissions.");
+      });
+    }
+  };
+
   const handleAutoSelectNearest = () => {
     const nearest = findNearestSafeShelter(userLat, userLng);
     if (nearest) {
@@ -53,9 +66,30 @@ export default function RoutingPage() {
 
   const calculateRouteForShelter = (targetShelter: Shelter) => {
     setIsCalculating(true);
+    setSafetyWarning(null);
+
+    // Safety Validation: Check if origin or destination is inside an active hazard zone (200m)
+    const activeHazards = incidents.filter(i => i.status !== 'RESOLVED' && i.status !== 'REJECTED' && i.verificationStatus !== 'FALSE_REPORT');
+    let originWarning = false;
+    let destWarning = false;
+
+    for (const h of activeHazards) {
+      if (distMeters(userLat, userLng, h.latitude, h.longitude) < 200) originWarning = true;
+      if (distMeters(targetShelter.latitude, targetShelter.longitude, h.latitude, h.longitude) < 200) destWarning = true;
+    }
+
+    if (originWarning && destWarning) {
+      setSafetyWarning("WARNING: Both Origin and Destination are inside active hazard zones.");
+    } else if (originWarning) {
+      setSafetyWarning("WARNING: Origin is inside an active hazard zone. Proceed with extreme caution.");
+    } else if (destWarning) {
+      setSafetyWarning("WARNING: Destination is inside an active hazard zone. Select another shelter if possible.");
+    }
+
     setTimeout(() => {
-      // Calculate realistic distance (Haversine approx in km)
-      const dist = Math.hypot(targetShelter.latitude - userLat, targetShelter.longitude - userLng) * 111;
+      // Calculate realistic distance using true Haversine distance in meters
+      const distM = distMeters(userLat, userLng, targetShelter.latitude, targetShelter.longitude);
+      const dist = distM / 1000;
       const roundedDist = parseFloat(dist.toFixed(1));
       const estTime = Math.max(5, Math.round(roundedDist * 2.8));
 
@@ -114,6 +148,13 @@ export default function RoutingPage() {
         
         {/* Left Control Panel */}
         <div className="lg:col-span-5 space-y-6">
+          {safetyWarning && (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-start animate-in slide-in-from-top-2">
+              <AlertTriangle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0 mt-0.5" />
+              <p className="text-red-400 text-sm font-bold leading-relaxed">{safetyWarning}</p>
+            </div>
+          )}
+
           <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6 shadow-xl">
             <h2 className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-5 flex items-center">
               <Compass className="w-4 h-4 mr-2 text-cyan-400" />
@@ -126,7 +167,12 @@ export default function RoutingPage() {
                 <span className="flex items-center text-xs font-bold text-zinc-300 uppercase tracking-wide">
                   <MapPin className="w-4 h-4 text-blue-400 mr-1.5" /> Starting Point
                 </span>
-                <span className="text-[10px] text-zinc-500 bg-zinc-800 px-2 py-0.5 rounded">GPS Origin</span>
+                <button 
+                  onClick={handleUseMyGPS}
+                  className="text-[10px] text-blue-400 hover:text-blue-300 underline flex items-center bg-zinc-800 px-2 py-0.5 rounded"
+                >
+                  <MapPin className="w-3 h-3 mr-1" /> Use My GPS
+                </button>
               </div>
               <div className="grid grid-cols-2 gap-2 mt-2">
                 <div>

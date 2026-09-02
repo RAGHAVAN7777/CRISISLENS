@@ -21,6 +21,7 @@ Strategy:
 import os
 import json
 import csv
+import io
 import time
 import torch
 import torch.nn as nn
@@ -83,12 +84,22 @@ class DamageDataset(Dataset):
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 
+def add_jpeg_noise(img):
+    out = io.BytesIO()
+    img.save(out, format='JPEG', quality=30)
+    out.seek(0)
+    return Image.open(out)
+
 train_tf = transforms.Compose([
     transforms.Resize(IMG_SIZE),
+    transforms.RandomRotation(degrees=15),
     transforms.RandomHorizontalFlip(),
     transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
+    transforms.RandomApply([transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5))], p=0.3),
+    transforms.RandomApply([transforms.Lambda(add_jpeg_noise)], p=0.2),
     transforms.RandomGrayscale(p=0.05),
     transforms.ToTensor(),
+    transforms.RandomErasing(p=0.2, scale=(0.02, 0.1), ratio=(0.3, 3.3)),
     transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
 ])
 

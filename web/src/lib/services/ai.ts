@@ -11,6 +11,30 @@ function notifyRouteSystem() {
   syncIncidentsToRoadGraph(all);
 }
 
+function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371e3;
+  const phi1 = lat1 * Math.PI/180;
+  const phi2 = lat2 * Math.PI/180;
+  const deltaPhi = (lat2-lat1) * Math.PI/180;
+  const deltaLambda = (lon2-lon1) * Math.PI/180;
+
+  const a = Math.sin(deltaPhi/2) * Math.sin(deltaPhi/2) +
+            Math.cos(phi1) * Math.cos(phi2) *
+            Math.sin(deltaLambda/2) * Math.sin(deltaLambda/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+function isDuplicateIncident(inc: Incident, reportLat: number, reportLng: number, reportCreatedAt: string): boolean {
+  if (inc.status === 'RESOLVED' || inc.status === 'REJECTED') return false;
+  const dist = calculateHaversineDistance(inc.latitude, inc.longitude, reportLat, reportLng);
+  if (dist > 100) return false;
+  const incTime = new Date(inc.createdAt).getTime();
+  const reportTime = new Date(reportCreatedAt).getTime();
+  if (Math.abs(incTime - reportTime) > 30 * 60 * 1000) return false;
+  return true;
+}
+
 /**
  * Determine verificationStatus and verificationRequired based on:
  *  - image blur
@@ -64,21 +88,15 @@ export class AIReasoningService {
 
     // ── Conflict detection: nearby incident with different hazard type ──
     const conflictingIncident = incidents.find(inc =>
-      inc.hazard !== report.hazard &&
-      inc.status !== 'RESOLVED' &&
-      inc.status !== 'REJECTED' &&
-      Math.abs(inc.latitude - report.latitude) < PROXIMITY_THRESHOLD_DEG &&
-      Math.abs(inc.longitude - report.longitude) < PROXIMITY_THRESHOLD_DEG
+      JSON.stringify(inc.hazard) !== JSON.stringify(report.hazard) &&
+      isDuplicateIncident(inc, report.latitude, report.longitude, report.createdAt)
     );
     const conflictingReports = !!conflictingIncident;
 
     // ── Try to fuse with an existing incident of the SAME type ──
     let targetIncident = incidents.find(inc =>
-      inc.hazard === report.hazard &&
-      inc.status !== 'RESOLVED' &&
-      inc.status !== 'REJECTED' &&
-      Math.abs(inc.latitude - report.latitude) < PROXIMITY_THRESHOLD_DEG &&
-      Math.abs(inc.longitude - report.longitude) < PROXIMITY_THRESHOLD_DEG
+      JSON.stringify(inc.hazard) === JSON.stringify(report.hazard) &&
+      isDuplicateIncident(inc, report.latitude, report.longitude, report.createdAt)
     );
 
     const { verificationRequired, verificationStatus } = assessVerificationNeed(
@@ -121,7 +139,7 @@ export class AIReasoningService {
       // Notify all volunteers
       notifyAllVolunteers(
         targetIncident.id,
-        visionData.hazard,
+        Array.isArray(visionData.hazard) ? visionData.hazard.join(' / ') : visionData.hazard,
         report.severity,
         visionData.confidence,
         isBlurry
@@ -151,7 +169,8 @@ export class AIReasoningService {
         imageUrl: imageUrl !== '/placeholder-disaster.jpg' ? imageUrl : undefined,
         disasterType: visionData.medic?.disaster_type,
         damageClass: visionData.damage?.damage_class,
-        createdAt: report.createdAt
+        createdAt: report.createdAt,
+        location_precision: 'exact'
       };
       addIncident(targetIncident);
       addReport(report);
@@ -159,7 +178,7 @@ export class AIReasoningService {
       // Notify all volunteers
       notifyAllVolunteers(
         targetIncident.id,
-        visionData.hazard,
+        Array.isArray(visionData.hazard) ? visionData.hazard.join(' / ') : visionData.hazard,
         report.severity,
         visionData.confidence,
         isBlurry
@@ -173,7 +192,9 @@ export class AIReasoningService {
   static async processTextReport(
     text: string,
     source: 'SMS' | 'Voice',
-    phoneNumber: string
+    phoneNumber: string,
+    twilioLat?: number,
+    twilioLng?: number
   ): Promise<{ report: Report; incident: Incident }> {
     await new Promise(resolve => setTimeout(resolve, 1500));
 
@@ -198,10 +219,12 @@ export class AIReasoningService {
     }
 
     // Mock geolocation near LA for demo purposes
-    const lat = 34.0522 + (Math.random() - 0.5) * 0.1;
-    const lng = -118.2437 + (Math.random() - 0.5) * 0.1;
+    const lat = twilioLat ?? (34.0522 + (Math.random() - 0.5) * 0.1);
+    const lng = twilioLng ?? (-118.2437 + (Math.random() - 0.5) * 0.1);
 
     const reportId = `rep_${Date.now()}`;
+    const location_precision = (source === 'SMS' || source === 'Voice') ? 'approximate' : 'exact';
+
     const report: Report = {
       id: reportId,
       source: source,
@@ -213,17 +236,15 @@ export class AIReasoningService {
       severity: severity,
       confidence: 85,
       evidence: [`NLP Extraction from ${source}`, `Sender: ${phoneNumber}`],
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      location_precision
     };
 
     const incidents = getIncidents();
 
     let targetIncident = incidents.find(inc =>
       inc.hazard === report.hazard &&
-      inc.status !== 'RESOLVED' &&
-      inc.status !== 'REJECTED' &&
-      Math.abs(inc.latitude - report.latitude) < PROXIMITY_THRESHOLD_DEG &&
-      Math.abs(inc.longitude - report.longitude) < PROXIMITY_THRESHOLD_DEG
+      isDuplicateIncident(inc, report.latitude, report.longitude, report.createdAt)
     );
 
     if (targetIncident) {
@@ -257,7 +278,8 @@ export class AIReasoningService {
         status: 'PENDING',
         verificationStatus: 'UNVERIFIED',
         verificationRequired: false,
-        createdAt: report.createdAt
+        createdAt: report.createdAt,
+        location_precision: report.location_precision
       };
       addIncident(targetIncident);
       addReport(report);

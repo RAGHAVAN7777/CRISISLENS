@@ -42,8 +42,11 @@ export default function ReportPage() {
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
   const [accuracy, setAccuracy] = useState<number | null>(null);
-  const [locationSource, setLocationSource] = useState<'GPS' | 'DEMO'>('GPS');
+  const [locationSource, setLocationSource] = useState<'GPS' | 'DEMO' | 'MANUAL'>('GPS');
   const [locationErrorMessage, setLocationErrorMessage] = useState<string>('');
+
+  const [manualLat, setManualLat] = useState<string>('');
+  const [manualLng, setManualLng] = useState<string>('');
 
   // Processing checklist state
   const [stages, setStages] = useState<ProcessingStage[]>([
@@ -80,14 +83,99 @@ export default function ReportPage() {
   // ─────────────────────────────────────────────────────────────────────────────
   // Core Automated Pipeline Trigger
   // ─────────────────────────────────────────────────────────────────────────────
-  const handleImageUpload = (file: File) => {
+  const resizeImage = (file: File, maxEdge: number = 1024, quality: number = 0.7): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      if (!file.type.startsWith('image/')) {
+        reject(new Error('Not an image file'));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+          if (width > maxEdge || height > maxEdge) {
+            if (width > height) {
+              height = Math.round((height * maxEdge) / width);
+              width = maxEdge;
+            } else {
+              width = Math.round((width * maxEdge) / height);
+              height = maxEdge;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(file);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          canvas.toBlob((blob) => {
+            if (blob) {
+              resolve(new File([blob], file.name, { type: 'image/jpeg', lastModified: Date.now() }));
+            } else {
+              resolve(file);
+            }
+          }, 'image/jpeg', quality);
+        };
+        img.onerror = () => reject(new Error('Failed to load image'));
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleImageUpload = async (file: File) => {
     if (!file) return;
-    setImageFile(file);
-    const previewUrl = URL.createObjectURL(file);
+    if (!file.type.startsWith('image/')) {
+      alert("Please upload a valid image file.");
+      return;
+    }
+    
+    let processedFile = file;
+    try {
+      processedFile = await resizeImage(file, 1024, 0.7);
+    } catch (e) {
+      console.warn("Failed to resize client-side, proceeding with original:", e);
+    }
+
+    setImageFile(processedFile);
+    const previewUrl = URL.createObjectURL(processedFile);
     setImagePreview(previewUrl);
 
     // Start immediate automated workflow
-    startPipeline(file, previewUrl);
+    startPipeline(processedFile, previewUrl);
+  };
+
+  const handleManualSubmit = async () => {
+    const latNum = parseFloat(manualLat);
+    const lngNum = parseFloat(manualLng);
+
+    try {
+      const res = await fetch('/api/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat: latNum, lon: lngNum })
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setLocationErrorMessage(data.error || 'Invalid coordinates');
+        return;
+      }
+    } catch (err) {
+      setLocationErrorMessage('Failed to validate coordinates with backend');
+      return;
+    }
+
+    setLocationSource('MANUAL');
+    setLocationErrorMessage('');
+    if (imageFile && imagePreview) {
+      startPipeline(imageFile, imagePreview, latNum, lngNum, 10);
+    }
   };
 
   const startPipeline = async (file: File, previewUrl: string, forcedLat?: number, forcedLng?: number, forcedAccuracy?: number) => {
@@ -413,6 +501,50 @@ export default function ReportPage() {
             <p className="text-zinc-600 text-xs">
               Demo location uses simulated emergency coordinates (34.0522, -118.2437) for demonstration purposes.
             </p>
+
+            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 mt-6 max-w-md mx-auto text-left animate-in fade-in">
+              <h3 className="text-white font-bold text-sm mb-2 flex items-center gap-2"><MapPin size={16}/> Set Location Manually</h3>
+              <p className="text-zinc-400 text-[11px] mb-3 leading-relaxed">Click on the map below or enter exact GPS coordinates. This ensures rescue teams know precisely where to find the incident.</p>
+              
+              <div className="flex gap-3 mb-4">
+                <input 
+                  type="number" 
+                  step="any"
+                  placeholder="Latitude (e.g. 34.05)"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500"
+                  value={manualLat}
+                  onChange={(e) => setManualLat(e.target.value)}
+                />
+                <input 
+                  type="number" 
+                  step="any"
+                  placeholder="Longitude (e.g. -118.24)"
+                  className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500"
+                  value={manualLng}
+                  onChange={(e) => setManualLng(e.target.value)}
+                />
+              </div>
+
+              <div className="h-56 rounded-xl overflow-hidden border border-zinc-800 mb-4 relative z-10 bg-zinc-950">
+                <MapComponent
+                  incidents={[]}
+                  center={manualLat && manualLng && !isNaN(parseFloat(manualLat)) && !isNaN(parseFloat(manualLng)) ? [parseFloat(manualLat), parseFloat(manualLng)] : undefined}
+                  onMapClick={(lat, lng) => {
+                    setManualLat(lat.toFixed(5));
+                    setManualLng(lng.toFixed(5));
+                  }}
+                  clickedLocation={manualLat && manualLng && !isNaN(parseFloat(manualLat)) && !isNaN(parseFloat(manualLng)) ? [parseFloat(manualLat), parseFloat(manualLng)] : undefined}
+                />
+              </div>
+
+              <button
+                onClick={handleManualSubmit}
+                disabled={!manualLat || !manualLng}
+                className="w-full bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-xl transition-colors text-sm flex items-center justify-center gap-2 shadow-lg shadow-red-900/20"
+              >
+                Submit with Manual Location <ArrowRight size={16}/>
+              </button>
+            </div>
           </div>
         )}
 

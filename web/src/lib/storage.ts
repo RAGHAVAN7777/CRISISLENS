@@ -11,7 +11,7 @@ export interface Report {
   latitude: number;
   longitude: number;
   accuracy?: number;
-  hazard: string;
+  hazard: string | string[];
   severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   confidence: number;
   evidence: string[];
@@ -19,6 +19,7 @@ export interface Report {
   blurScore?: number;
   isBlurry?: boolean;
   createdAt: string;
+  location_precision?: 'approximate' | 'exact';
 }
 
 export type VerificationStatus =
@@ -32,7 +33,7 @@ export type VerificationStatus =
 
 export interface Incident {
   id: string;
-  hazard: string;
+  hazard: string | string[];
   severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   latitude: number;
   longitude: number;
@@ -41,7 +42,7 @@ export interface Incident {
   reportIds: string[];
   reportCount: number;
   sources: string[];
-  status: 'PENDING' | 'AI_CLASSIFIED' | 'VERIFIED' | 'RESOLVED' | 'REJECTED';
+  status: 'PENDING' | 'AI_CLASSIFIED' | 'VERIFIED' | 'RESOLVED' | 'REJECTED' | 'STALE';
   createdAt: string;
   // Blur & verification
   blurScore?: number;
@@ -57,6 +58,7 @@ export interface Incident {
   imageUrl?: string;
   // Fusion
   conflictingReports?: boolean;
+  location_precision?: 'approximate' | 'exact';
 }
 
 export interface Shelter {
@@ -173,7 +175,33 @@ export const updateReport = (id: string, updates: Partial<Report>): void => {
 // Incidents
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const getIncidents = (): Incident[] => getItem<Incident[]>(KEYS.INCIDENTS, []);
+export const getIncidents = (includeOlder: boolean = false): Incident[] => {
+  const incidents = getItem<Incident[]>(KEYS.INCIDENTS, []);
+  let changed = false;
+  const now = Date.now();
+  
+  const updated = incidents.map(inc => {
+    const age = now - new Date(inc.createdAt).getTime();
+    if (age > 24 * 60 * 60 * 1000 && inc.status !== 'RESOLVED' && inc.status !== 'REJECTED' && inc.status !== 'STALE') {
+      changed = true;
+      return { ...inc, status: 'STALE' as const };
+    }
+    return inc;
+  });
+
+  if (changed) {
+    saveIncidents(updated);
+  }
+
+  if (includeOlder) {
+    return updated;
+  }
+
+  return updated.filter(inc => {
+    const age = now - new Date(inc.createdAt).getTime();
+    return age <= 72 * 60 * 60 * 1000;
+  });
+};
 export const saveIncidents = (incidents: Incident[]): void => setItem(KEYS.INCIDENTS, incidents);
 export const addIncident = (incident: Incident): void => {
   const incidents = getIncidents();

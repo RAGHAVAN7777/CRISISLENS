@@ -149,7 +149,7 @@ export function evaluateRouteRisk(
 
       hazards.push({
         incidentId: inc.id,
-        hazard: inc.hazard || 'Disaster Hazard',
+        hazard: Array.isArray(inc.hazard) ? inc.hazard.join(' / ') : inc.hazard || 'Disaster Hazard',
         severity: inc.severity,
         verificationStatus: inc.verificationStatus,
         distanceM: Math.round(minDistanceM),

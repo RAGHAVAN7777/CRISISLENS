@@ -209,7 +209,12 @@ export default function JudgePage() {
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-4">
                     <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold mb-1">Identified Hazard</p>
-                    <p className="text-2xl font-black text-purple-400 uppercase">{result.medic?.hazard || result.hazard}</p>
+                    <p className="text-2xl font-black text-purple-400 uppercase">
+                      {(() => {
+                        const h = result.medic?.hazard || result.hazard;
+                        return Array.isArray(h) ? h.join(' / ') : h;
+                      })()}
+                    </p>
                   </div>
                   <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-4">
                     <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold mb-1">Model Confidence</p>
